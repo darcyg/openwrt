@@ -44,6 +44,7 @@ ramips_setup_interfaces()
 	awm002-evb | \
 	broadway | \
 	dcs-930| \
+	riptv-fxs-001 | \
 	wnce2001)
 		ucidef_add_switch "switch0" "1" "0"
 		ucidef_set_interface_lan "eth0"

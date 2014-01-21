@@ -327,6 +327,8 @@ Image/Build/Profile/ASL26555=$(call BuildFirmware/ASL26555/$(1),$(1),asl26555,AS
 
 Image/Build/Profile/AWM002EVB=$(call BuildFirmware/DefaultDualSize/$(1),$(1),awm002-evb,AWM002-EVB)
 
+Image/Build/Profile/RIPTV_FXS_001=$(call BuildFirmware/Default8M/$(1),$(1),riptv-fxs-001,RIPTV_FXS_001)
+
 Image/Build/Profile/BC2=$(call BuildFirmware/Default8M/$(1),$(1),bc2,BC2)
 
 broadway_mtd_size=7929856
@@ -570,6 +572,7 @@ define Image/Build/Profile/Default
 	$(call Image/Build/Profile/OMNI-EMB,$(1))
 	$(call Image/Build/Profile/PSR-680W,$(1))
 	$(call Image/Build/Profile/PWH2004,$(1))
+	$(call Image/Build/Profile/RIPTV_FXS_001,$(1))
 	$(call Image/Build/Profile/RTG32B1,$(1))
 	$(call Image/Build/Profile/RTN10PLUS,$(1))
 	$(call Image/Build/Profile/RT-N13U,$(1))

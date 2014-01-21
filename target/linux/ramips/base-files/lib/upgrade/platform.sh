@@ -61,6 +61,7 @@ platform_check_image() {
 	omni-emb | \
 	omni-emb-hpm | \
 	psr-680w | \
+	riptv-fxs-001 | \
 	rp-n53 | \
 	rt-g32-b1 | \
 	rt-n10-plus | \
