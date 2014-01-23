@@ -44,7 +44,9 @@
 			};
 			test_spi@1 {
 				compatible = "test_spi";
+				linux,modalias = "test_spi";
 				reg = <1 0>;
+				spi-max-frequency = <5000000>;
 			};
 		};
 	};
