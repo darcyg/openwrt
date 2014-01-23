@@ -1,0 +1,5 @@
+export PATH=$HOME/wrtSip/mipscc/bin:$PATH
+export CROSS_COMPILE=$HOME/wrtSip/mipscc/bin/mipsel-openwrt-linux-
+export ARCH=mips
+export KDIR=/home/xilun/wrtSip/linux-3.10.26
+
