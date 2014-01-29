@@ -56,6 +56,7 @@ static int test_spi_remove(struct spi_device *spi)
 
 static const struct spi_device_id test_spi_ids[] = {
 	{ "test_spi",  0 },
+	{ "ve890",  0 },
 	{}
 };
 MODULE_DEVICE_TABLE(spi, test_spi_ids);

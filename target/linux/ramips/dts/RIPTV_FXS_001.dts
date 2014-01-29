@@ -42,19 +42,23 @@
 					reg = <0x50000 0x1fb0000>;
 				};
 			};
-			test_spi@1 {
-				compatible = "test_spi";
-				linux,modalias = "test_spi";
+			ve890@1 {
+				compatible = "ve890";
+				linux,modalias = "ve890";
 				reg = <1 0>;
 				spi-max-frequency = <5000000>;
 			};
 		};
+
+		pcm@2000 {
+			status = "okay";
+		};
 	};
-	
+
 	pinctrl {
 		state_default: pinctrl0 {
 			gpio {
-				ralink,group = "i2c", "jtag", "uartf";
+				ralink,group = "i2c", "jtag";
 				ralink,function = "gpio";
 			};
 		};

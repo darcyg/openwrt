@@ -208,6 +208,22 @@
 			interrupt-parent = <&cpuintc>;
 			interrupts = <7>;
 		};
+
+		pcm@2000 {
+			compatible = "ralink,rt5350-pcm";
+			reg = <0x2000 0x100>;
+
+			resets = <&rstctrl 11>;
+			reset-names = "pcm";
+
+			interrupt-parent = <&intc>;
+			interrupts = <12>;
+
+			pinctrl-names = "default";
+			pinctrl-0 = <&pcm_pins>;
+
+			status = "disabled";
+		};
 	};
 
 	pinctrl {
@@ -247,6 +263,12 @@
 			uartf {
 				ralink,group = "uartf";
 				ralink,function = "uartf";
+			};
+		};
+		pcm_pins: pcm {
+			pcm {
+				ralink,group = "uartf";
+				ralink,function = "pcm gpio";
 			};
 		};
 	};
