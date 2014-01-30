@@ -217,7 +217,7 @@
 			reset-names = "pcm";
 
 			interrupt-parent = <&intc>;
-			interrupts = <12>;
+			interrupts = <4>;
 
 			pinctrl-names = "default";
 			pinctrl-0 = <&pcm_pins>;
