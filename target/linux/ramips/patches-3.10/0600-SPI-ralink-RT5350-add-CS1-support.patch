@@ -1,0 +1,485 @@
+--- a/drivers/spi/spi-rt2880.c
++++ b/drivers/spi/spi-rt2880.c
+@@ -3,6 +3,7 @@
+  *
+  * Copyright (C) 2011 Sergiy <piratfm@gmail.com>
+  * Copyright (C) 2011-2013 Gabor Juhos <juhosg@openwrt.org>
++ * Copyright (C) 2014 Guillaume Knispel <xilun0@gmail.com>
+  *
+  * Some parts are based on spi-orion.c:
+  *   Author: Shadi Ammouri <shadi@marvell.com>
+@@ -27,8 +28,9 @@
+ #include <ralink_regs.h>
+ 
+ #define DRIVER_NAME			"spi-rt2880"
+-/* only one slave is supported*/
+-#define RALINK_NUM_CHIPSELECTS		1
++
++#define RALINK_MAX_NUM_CS		2		// 2 supported on RT5350
++
+ /* in usec */
+ #define RALINK_SPI_WAIT_MAX_LOOP	2000
+ 
+@@ -36,7 +38,10 @@
+ #define RAMIPS_SPI_CFG			0x10
+ #define RAMIPS_SPI_CTL			0x14
+ #define RAMIPS_SPI_DATA			0x20
+-#define RAMIPS_SPI_FIFO_STAT		0x38
++
++#define RAMIPS_SPI_CS_OFFSET		0x40		// for RT5350 with CS0 and CS1
++
++#define RAMIPS_SPI_ARB			0xf0
+ 
+ /* SPISTAT register bit field */
+ #define SPISTAT_BUSY			BIT(0)
+@@ -63,8 +68,10 @@
+ #define SPICTL_STARTRD			BIT(1)
+ #define SPICTL_SPIENA			BIT(0)
+ 
+-/* SPIFIFOSTAT register bit field */
+-#define SPIFIFOSTAT_TXFULL		BIT(17)
++/* SPIARB register bit field */
++#define SPIARB_SPI0_POR			BIT(0)
++#define SPIARB_SPI1_POR			BIT(1)
++#define SPIARB_ARB_EN			BIT(31)
+ 
+ #define MT7621_SPI_TRANS	0x00
+ #define SPITRANS_BUSY		BIT(16)
+@@ -77,21 +84,29 @@
+ #define MT7621_SPI_SPACE	0x3c
+ 
+ struct rt2880_spi;
++struct rt2880_spi_cs;
+ 
+ struct rt2880_spi_ops {
++	unsigned int max_num_cs;			// must be <= RALINK_MAX_NUM_CS
+ 	void (*init_hw)(struct rt2880_spi *rs);
+-	void (*set_cs)(struct rt2880_spi *rs, int enable);
++	void (*set_cs)(struct rt2880_spi_cs *cs, int enable);
+ 	int (*baudrate_set)(struct spi_device *spi, unsigned int speed);
+ 	unsigned int (*write_read)(struct spi_device *spi, struct list_head *list, struct spi_transfer *xfer);
+ };
+ 
++struct rt2880_spi_cs {
++	unsigned int 	speed;
++	void __iomem	*cs_base;
++	spinlock_t	lock;
++};
++
+ struct rt2880_spi {
+ 	struct spi_master	*master;
+ 	void __iomem		*base;
+ 	unsigned int		sys_freq;
+-	unsigned int		speed;
+ 	struct clk		*clk;
+-	spinlock_t		lock;
++
++	struct rt2880_spi_cs	cs[RALINK_MAX_NUM_CS];
+ 
+ 	struct rt2880_spi_ops	*ops;
+ };
+@@ -101,45 +116,56 @@ static inline struct rt2880_spi *spidev_
+ 	return spi_master_get_devdata(spi->master);
+ }
+ 
+-static inline u32 rt2880_spi_read(struct rt2880_spi *rs, u32 reg)
++static inline u32 rt2880_spi_raw_read(struct rt2880_spi *rs, u32 reg)
+ {
+ 	return ioread32(rs->base + reg);
+ }
+ 
+-static inline void rt2880_spi_write(struct rt2880_spi *rs, u32 reg, u32 val)
++static inline void rt2880_spi_raw_write(struct rt2880_spi *rs, u32 reg, u32 val)
+ {
+ 	iowrite32(val, rs->base + reg);
+ }
+ 
+-static inline void rt2880_spi_setbits(struct rt2880_spi *rs, u32 reg, u32 mask)
++static inline u32 rt2880_spi_cs_read(struct rt2880_spi_cs *cs, u32 reg)
++{
++	return ioread32(cs->cs_base + reg);
++}
++
++static inline void rt2880_spi_cs_write(struct rt2880_spi_cs *cs, u32 reg, u32 val)
++{
++	iowrite32(val, cs->cs_base + reg);
++}
++
++static inline void rt2880_spi_cs_setbits(struct rt2880_spi_cs *cs, u32 reg, u32 mask)
+ {
+-	void __iomem *addr = rs->base + reg;
++	void __iomem *addr = cs->cs_base + reg;
+ 	unsigned long flags;
+ 	u32 val;
+ 
+-	spin_lock_irqsave(&rs->lock, flags);
++	spin_lock_irqsave(&cs->lock, flags);
+ 	val = ioread32(addr);
+ 	val |= mask;
+ 	iowrite32(val, addr);
+-	spin_unlock_irqrestore(&rs->lock, flags);
++	spin_unlock_irqrestore(&cs->lock, flags);
+ }
+ 
+-static inline void rt2880_spi_clrbits(struct rt2880_spi *rs, u32 reg, u32 mask)
++static inline void rt2880_spi_cs_clrbits(struct rt2880_spi_cs *cs, u32 reg, u32 mask)
+ {
+-	void __iomem *addr = rs->base + reg;
++	void __iomem *addr = cs->cs_base + reg;
+ 	unsigned long flags;
+ 	u32 val;
+ 
+-	spin_lock_irqsave(&rs->lock, flags);
++	spin_lock_irqsave(&cs->lock, flags);
+ 	val = ioread32(addr);
+ 	val &= ~mask;
+ 	iowrite32(val, addr);
+-	spin_unlock_irqrestore(&rs->lock, flags);
++	spin_unlock_irqrestore(&cs->lock, flags);
+ }
+ 
+ static int rt2880_spi_baudrate_set(struct spi_device *spi, unsigned int speed)
+ {
+ 	struct rt2880_spi *rs = spidev_to_rt2880_spi(spi);
++	struct rt2880_spi_cs *cs = &rs->cs[spi->chip_select];
+ 	u32 rate;
+ 	u32 prescale;
+ 	u32 reg;
+@@ -166,10 +192,10 @@ static int rt2880_spi_baudrate_set(struc
+ 	prescale = ilog2(rate / 2);
+ 	dev_dbg(&spi->dev, "prescale:%u\n", prescale);
+ 
+-	reg = rt2880_spi_read(rs, RAMIPS_SPI_CFG);
++	reg = rt2880_spi_cs_read(cs, RAMIPS_SPI_CFG);
+ 	reg = ((reg & ~SPICFG_SPICLK_PRESCALE_MASK) | prescale);
+-	rt2880_spi_write(rs, RAMIPS_SPI_CFG, reg);
+-	rs->speed = speed;
++	rt2880_spi_cs_write(cs, RAMIPS_SPI_CFG, reg);
++	cs->speed = speed;
+ 	return 0;
+ }
+ 
+@@ -191,13 +217,14 @@ static int
+ rt2880_spi_setup_transfer(struct spi_device *spi, struct spi_transfer *t)
+ {
+ 	struct rt2880_spi *rs = spidev_to_rt2880_spi(spi);
++	struct rt2880_spi_cs *cs = &rs->cs[spi->chip_select];
+ 	unsigned int speed = spi->max_speed_hz;
+ 	int rc;
+ 
+ 	if ((t != NULL) && t->speed_hz)
+ 		speed = t->speed_hz;
+ 
+-	if (rs->speed != speed) {
++	if (cs->speed != speed) {
+ 		dev_dbg(&spi->dev, "speed_hz:%u\n", speed);
+ 		rc = rs->ops->baudrate_set(spi, speed);
+ 		if (rc)
+@@ -207,33 +234,33 @@ rt2880_spi_setup_transfer(struct spi_dev
+ 	return 0;
+ }
+ 
+-static void rt2880_spi_set_cs(struct rt2880_spi *rs, int enable)
++static void rt2880_spi_set_cs(struct rt2880_spi_cs *cs, int enable)
+ {
+ 	if (enable)
+-		rt2880_spi_clrbits(rs, RAMIPS_SPI_CTL, SPICTL_SPIENA);
++		rt2880_spi_cs_clrbits(cs, RAMIPS_SPI_CTL, SPICTL_SPIENA);
+ 	else
+-		rt2880_spi_setbits(rs, RAMIPS_SPI_CTL, SPICTL_SPIENA);
++		rt2880_spi_cs_setbits(cs, RAMIPS_SPI_CTL, SPICTL_SPIENA);
+ }
+ 
+-static void mt7621_spi_set_cs(struct rt2880_spi *rs, int enable)
++static void mt7621_spi_set_cs(struct rt2880_spi_cs *cs, int enable)
+ {
+-	u32 polar = rt2880_spi_read(rs, MT7621_SPI_POLAR);
++	u32 polar = rt2880_spi_cs_read(cs, MT7621_SPI_POLAR);
+ 
+ 	if (enable)
+ 		polar |= 1;
+ 	else
+ 		polar &= ~1;
+-	rt2880_spi_write(rs, MT7621_SPI_POLAR, polar);
++	rt2880_spi_cs_write(cs, MT7621_SPI_POLAR, polar);
+ }
+ 
+-static inline int rt2880_spi_wait_till_ready(struct rt2880_spi *rs)
++static inline int rt2880_spi_wait_till_ready(struct rt2880_spi_cs *cs)
+ {
+ 	int i;
+ 
+ 	for (i = 0; i < RALINK_SPI_WAIT_MAX_LOOP; i++) {
+ 		u32 status;
+ 
+-		status = rt2880_spi_read(rs, RAMIPS_SPI_STAT);
++		status = rt2880_spi_cs_read(cs, RAMIPS_SPI_STAT);
+ 		if ((status & SPISTAT_BUSY) == 0)
+ 			return 0;
+ 
+@@ -244,14 +271,14 @@ static inline int rt2880_spi_wait_till_r
+ 	return -ETIMEDOUT;
+ }
+ 
+-static inline int mt7621_spi_wait_till_ready(struct rt2880_spi *rs)
++static inline int mt7621_spi_wait_till_ready(struct rt2880_spi_cs *cs)
+ {
+ 	int i;
+ 
+ 	for (i = 0; i < RALINK_SPI_WAIT_MAX_LOOP; i++) {
+ 		u32 status;
+ 
+-		status = rt2880_spi_read(rs, MT7621_SPI_TRANS);
++		status = rt2880_spi_cs_read(cs, MT7621_SPI_TRANS);
+ 		if ((status & SPITRANS_BUSY) == 0) {
+ 			return 0;
+ 		}
+@@ -266,6 +293,7 @@ static unsigned int
+ rt2880_spi_write_read(struct spi_device *spi, struct list_head *list, struct spi_transfer *xfer)
+ {
+ 	struct rt2880_spi *rs = spidev_to_rt2880_spi(spi);
++	struct rt2880_spi_cs *cs = &rs->cs[spi->chip_select];
+ 	unsigned count = 0;
+ 	u8 *rx = xfer->rx_buf;
+ 	const u8 *tx = xfer->tx_buf;
+@@ -277,9 +305,9 @@ rt2880_spi_write_read(struct spi_device
+ 
+ 	if (tx) {
+ 		for (count = 0; count < xfer->len; count++) {
+-			rt2880_spi_write(rs, RAMIPS_SPI_DATA, tx[count]);
+-			rt2880_spi_setbits(rs, RAMIPS_SPI_CTL, SPICTL_STARTWR);
+-			err = rt2880_spi_wait_till_ready(rs);
++			rt2880_spi_cs_write(cs, RAMIPS_SPI_DATA, tx[count]);
++			rt2880_spi_cs_setbits(cs, RAMIPS_SPI_CTL, SPICTL_STARTWR);
++			err = rt2880_spi_wait_till_ready(cs);
+ 			if (err) {
+ 				dev_err(&spi->dev, "TX failed, err=%d\n", err);
+ 				goto out;
+@@ -289,13 +317,13 @@ rt2880_spi_write_read(struct spi_device
+ 
+ 	if (rx) {
+ 		for (count = 0; count < xfer->len; count++) {
+-			rt2880_spi_setbits(rs, RAMIPS_SPI_CTL, SPICTL_STARTRD);
+-			err = rt2880_spi_wait_till_ready(rs);
++			rt2880_spi_cs_setbits(cs, RAMIPS_SPI_CTL, SPICTL_STARTRD);
++			err = rt2880_spi_wait_till_ready(cs);
+ 			if (err) {
+ 				dev_err(&spi->dev, "RX failed, err=%d\n", err);
+ 				goto out;
+ 			}
+-			rx[count] = (u8) rt2880_spi_read(rs, RAMIPS_SPI_DATA);
++			rx[count] = (u8) rt2880_spi_cs_read(cs, RAMIPS_SPI_DATA);
+ 		}
+ 	}
+ 
+@@ -307,6 +335,7 @@ static unsigned int
+ mt7621_spi_write_read(struct spi_device *spi, struct list_head *list, struct spi_transfer *xfer)
+ {
+ 	struct rt2880_spi *rs = spidev_to_rt2880_spi(spi);
++	struct rt2880_spi_cs *cs = &rs->cs[spi->chip_select];
+ 	struct spi_transfer *next = NULL;
+ 	const u8 *tx = xfer->tx_buf;
+ 	u8 *rx = NULL;
+@@ -321,7 +350,7 @@ mt7621_spi_write_read(struct spi_device
+ 		rx = next->rx_buf;
+ 	}
+ 
+-	trans = rt2880_spi_read(rs, MT7621_SPI_TRANS);
++	trans = rt2880_spi_cs_read(cs, MT7621_SPI_TRANS);
+ 	trans &= ~SPI_CTL_TX_RX_CNT_MASK;
+ 
+ 	if (tx) {
+@@ -351,22 +380,22 @@ mt7621_spi_write_read(struct spi_device
+ 			return -EINVAL;
+ 		}
+ 
+-		rt2880_spi_write(rs, MT7621_SPI_DATA0, data0);
+-		rt2880_spi_write(rs, MT7621_SPI_OPCODE, opcode);
++		rt2880_spi_cs_write(cs, MT7621_SPI_DATA0, data0);
++		rt2880_spi_cs_write(cs, MT7621_SPI_OPCODE, opcode);
+ 		trans |= xfer->len;
+ 	}
+ 
+ 	if (rx)
+ 		trans |= (next->len << 4);
+-	rt2880_spi_write(rs, MT7621_SPI_TRANS, trans);
++	rt2880_spi_cs_write(cs, MT7621_SPI_TRANS, trans);
+ 	trans |= SPI_CTL_START;
+-	rt2880_spi_write(rs, MT7621_SPI_TRANS, trans);
++	rt2880_spi_cs_write(cs, MT7621_SPI_TRANS, trans);
+ 
+-	mt7621_spi_wait_till_ready(rs);
++	mt7621_spi_wait_till_ready(cs);
+ 
+ 	if (rx) {
+-		u32 data0 = rt2880_spi_read(rs, MT7621_SPI_DATA0);
+-		u32 opcode = rt2880_spi_read(rs, MT7621_SPI_OPCODE);
++		u32 data0 = rt2880_spi_cs_read(cs, MT7621_SPI_DATA0);
++		u32 opcode = rt2880_spi_cs_read(cs, MT7621_SPI_OPCODE);
+ 
+ 		switch (next->len) {
+ 		case 8:
+@@ -402,6 +431,7 @@ static int rt2880_spi_transfer_one_messa
+ {
+ 	struct rt2880_spi *rs = spi_master_get_devdata(master);
+ 	struct spi_device *spi = m->spi;
++	struct rt2880_spi_cs *cs = &rs->cs[spi->chip_select];
+ 	struct spi_transfer *t = NULL;
+ 	int par_override = 0;
+ 	int status = 0;
+@@ -438,7 +468,7 @@ static int rt2880_spi_transfer_one_messa
+ 		}
+ 
+ 		if (!cs_active) {
+-			rs->ops->set_cs(rs, 1);
++			rs->ops->set_cs(cs, 1);
+ 			cs_active = 1;
+ 		}
+ 
+@@ -449,14 +479,14 @@ static int rt2880_spi_transfer_one_messa
+ 			udelay(t->delay_usecs);
+ 
+ 		if (t->cs_change) {
+-			rs->ops->set_cs(rs, 0);
++			rs->ops->set_cs(cs, 0);
+ 			cs_active = 0;
+ 		}
+ 	}
+ 
+ msg_done:
+ 	if (cs_active)
+-		rs->ops->set_cs(rs, 0);
++		rs->ops->set_cs(cs, 0);
+ 
+ 	m->status = status;
+ 	spi_finalize_current_message(master);
+@@ -486,30 +516,46 @@ static int rt2880_spi_setup(struct spi_d
+ 
+ static void rt2880_spi_reset(struct rt2880_spi *rs)
+ {
+-	rt2880_spi_write(rs, RAMIPS_SPI_CFG,
+-			 SPICFG_MSBFIRST | SPICFG_TXCLKEDGE_FALLING |
+-			 SPICFG_SPICLK_DIV16 | SPICFG_SPICLKPOL);
+-	rt2880_spi_write(rs, RAMIPS_SPI_CTL, SPICTL_HIZSDO | SPICTL_SPIENA);
++	unsigned i;
++	if (rs->master->num_chipselect > 1) {
++		rt2880_spi_raw_write(rs, RAMIPS_SPI_ARB, SPIARB_ARB_EN);
++		// no SPI0_POR / SPI1_POR => enable low active
++	}
++	for (i = 0; i < rs->master->num_chipselect; i++) {
++		struct rt2880_spi_cs *cs = &rs->cs[i];
++		rt2880_spi_cs_write(cs, RAMIPS_SPI_CFG,
++				 SPICFG_MSBFIRST | SPICFG_TXCLKEDGE_FALLING |
++				 SPICFG_SPICLK_DIV16 | SPICFG_SPICLKPOL);
++		rt2880_spi_cs_write(cs, RAMIPS_SPI_CTL, SPICTL_HIZSDO | SPICTL_SPIENA);
++	}
+ }
+ 
+ static void mt7621_spi_reset(struct rt2880_spi *rs)
+ {
+-	u32 master = rt2880_spi_read(rs, MT7621_SPI_MASTER);
++	u32 master = rt2880_spi_raw_read(rs, MT7621_SPI_MASTER);
+ 
+ 	master &= ~(0xfff << 16);
+ 	master |= 3 << 16;
+ 
+ 	master |= 7 << 29;
+-	rt2880_spi_write(rs, MT7621_SPI_MASTER, master);
++	rt2880_spi_raw_write(rs, MT7621_SPI_MASTER, master);
+ }
+ 
+ static struct rt2880_spi_ops spi_ops[] = {
+ 	{
++		.max_num_cs = 2,
++		.init_hw = rt2880_spi_reset,
++		.set_cs = rt2880_spi_set_cs,
++		.baudrate_set = rt2880_spi_baudrate_set,
++		.write_read = rt2880_spi_write_read,
++	}, {
++		.max_num_cs = 1,
+ 		.init_hw = rt2880_spi_reset,
+ 		.set_cs = rt2880_spi_set_cs,
+ 		.baudrate_set = rt2880_spi_baudrate_set,
+ 		.write_read = rt2880_spi_write_read,
+ 	}, {
++		.max_num_cs = 1,
+ 		.init_hw = mt7621_spi_reset,
+ 		.set_cs = mt7621_spi_set_cs,
+ 		.baudrate_set = mt7621_spi_baudrate_set,
+@@ -518,8 +564,9 @@ static struct rt2880_spi_ops spi_ops[] =
+ };
+ 
+ static const struct of_device_id rt2880_spi_match[] = {
+-	{ .compatible = "ralink,rt2880-spi", .data = &spi_ops[0]},
+-	{ .compatible = "ralink,mt7621-spi", .data = &spi_ops[1] },
++	{ .compatible = "ralink,rt5350-spi", .data = &spi_ops[0]},
++	{ .compatible = "ralink,rt2880-spi", .data = &spi_ops[1]},
++	{ .compatible = "ralink,mt7621-spi", .data = &spi_ops[2] },
+ 	{},
+ };
+ MODULE_DEVICE_TABLE(of, rt2880_spi_match);
+@@ -528,17 +575,20 @@ static int rt2880_spi_probe(struct platf
+ {
+         const struct of_device_id *match;
+ 	struct spi_master *master;
++	struct rt2880_spi_ops *rs_ops;
+ 	struct rt2880_spi *rs;
+-	unsigned long flags;
+ 	void __iomem *base;
+ 	struct resource *r;
+ 	int status = 0;
+ 	struct clk *clk;
++	u32 i, num_cs;
+ 
+         match = of_match_device(rt2880_spi_match, &pdev->dev);
+ 	if (!match)
+ 		return -EINVAL;
+ 
++	rs_ops = (struct rt2880_spi_ops *) match->data;
++
+ 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+ 	base = devm_ioremap_resource(&pdev->dev, r);
+ 	if (IS_ERR(base))
+@@ -566,10 +616,19 @@ static int rt2880_spi_probe(struct platf
+ 
+ 	master->setup = rt2880_spi_setup;
+ 	master->transfer_one_message = rt2880_spi_transfer_one_message;
+-	master->num_chipselect = RALINK_NUM_CHIPSELECTS;
+ 	master->bits_per_word_mask = SPI_BPW_MASK(8);
+ 	master->dev.of_node = pdev->dev.of_node;
+ 
++	/* get number of chipselects */
++	if (of_property_read_u32(pdev->dev.of_node, "num-cs", &num_cs) < 0) {
++		num_cs = 1;
++	}
++	if (num_cs > rs_ops->max_num_cs) {
++		dev_warn(&pdev->dev, "number of chipselects too high, limiting to max supported: %u\n", rs_ops->max_num_cs);
++		num_cs = rs_ops->max_num_cs;
++	}
++	master->num_chipselect = num_cs;
++
+ 	dev_set_drvdata(&pdev->dev, master);
+ 
+ 	rs = spi_master_get_devdata(master);
+@@ -577,9 +636,13 @@ static int rt2880_spi_probe(struct platf
+ 	rs->clk = clk;
+ 	rs->master = master;
+ 	rs->sys_freq = clk_get_rate(rs->clk);
+-	rs->ops = (struct rt2880_spi_ops *) match->data;
++	rs->ops = rs_ops;
+ 	dev_dbg(&pdev->dev, "sys_freq: %u\n", rs->sys_freq);
+-	spin_lock_irqsave(&rs->lock, flags);
++
++	for (i = 0; i < num_cs; i++) {
++		rs->cs[i].cs_base = rs->base + (i * RAMIPS_SPI_CS_OFFSET);
++		spin_lock_init(&rs->cs[i].lock);
++	}
+ 
+ 	device_reset(&pdev->dev);
+ 
+@@ -619,4 +682,5 @@ module_platform_driver(rt2880_spi_driver
+ MODULE_DESCRIPTION("Ralink SPI driver");
+ MODULE_AUTHOR("Sergiy <piratfm@gmail.com>");
+ MODULE_AUTHOR("Gabor Juhos <juhosg@openwrt.org>");
++MODULE_AUTHOR("Guillaume Knispel <xilun0@gmail.com>");
+ MODULE_LICENSE("GPL");
