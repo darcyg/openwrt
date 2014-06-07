@@ -212,10 +212,10 @@
 			#address-cells = <1>;
 			#size-cells = <1>;
 
-			status = "disabled";
-
 			pinctrl-names = "default";
 			pinctrl-0 = <&spi_pins>;
+
+			status = "disabled";
 		};
 
 		uartlite@c00 {
@@ -248,12 +248,16 @@
 		pcm@2000 {
 			compatible = "ralink,mt7620a-pcm";
 			reg = <0x2000 0x800>;
+			#reg = <0x2000 0x100>;
 
 			resets = <&rstctrl 11>;
 			reset-names = "pcm";
 
 			interrupt-parent = <&intc>;
 			interrupts = <4>;
+
+                        pinctrl-names = "default";
+                        pinctrl-0 = <&pcm_pins>;
 
 			status = "disabled";
 		};
@@ -334,6 +338,12 @@
 			rgmii2 {
 				ralink,group = "rgmii2";
 				ralink,function = "rgmii2";
+			};
+		};
+		pcm_pins: pcm {
+			pcm {
+				ralink,group = "uartf";
+				ralink,function = "pcm gpio";
 			};
 		};
 	};
