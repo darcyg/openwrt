@@ -17,6 +17,10 @@
 			status = "okay";
 		};
 
+		gpio1: gpio@638 {
+			status = "okay";
+		};
+
 		spi@b00 {
 			status = "okay";
 			num-cs = <2>;
@@ -26,7 +30,7 @@
 				compatible = "mx25l6405d";
 				reg = <0 0>;
 				linux,modalias = "m25p80", "mx25l6405d", "en25q64";
-				spi-max-frequency = <10000000>;
+				spi-max-frequency = <800000>;
 
 				partition@0 {
 					label = "u-boot";
@@ -55,7 +59,7 @@
 				compatible = "ve890";
 				linux,modalias = "ve890";
 				reg = <1 0>;
-				spi-max-frequency = <500000>;
+				spi-max-frequency = <800000>;
 			};
 		};
 		pcm@2000 {
@@ -65,7 +69,7 @@
 	pinctrl {
 		state_default: pinctrl0 {
 			gpio {
-				ralink,group = "i2c", "mdio";
+				ralink,group = "i2c", "mdio", "rgmii1";
 				ralink,function = "gpio";
 			};
 		};

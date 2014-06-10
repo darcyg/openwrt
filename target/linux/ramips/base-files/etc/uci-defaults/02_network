@@ -42,6 +42,7 @@ ramips_setup_interfaces()
 	all5002 | \
 	all5003 | \
 	awm002-evb | \
+	mt7620-fxs-001 | \
 	broadway | \
 	dcs-930| \
 	wnce2001)

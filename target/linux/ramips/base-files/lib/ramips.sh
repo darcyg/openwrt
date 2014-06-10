@@ -193,6 +193,9 @@ ramips_board_detect() {
 	*"Asus RP-N53")
 		name="rp-n53"
 		;;
+        *"RIPTV FXS 001")
+                name="riptv-fxs-001"
+                ;;
 	*"RT-G32 B1")
 		name="rt-g32-b1"
 		;;
