@@ -1,0 +1,10 @@
+--- a/drivers/spi/spi-rt2880.c
++++ b/drivers/spi/spi-rt2880.c
+@@ -565,6 +565,7 @@ static struct rt2880_spi_ops spi_ops[] =
+ 
+ static const struct of_device_id rt2880_spi_match[] = {
+ 	{ .compatible = "ralink,rt5350-spi", .data = &spi_ops[0]},
++	{ .compatible = "ralink,mt7620a-spi", .data = &spi_ops[0]},
+ 	{ .compatible = "ralink,rt2880-spi", .data = &spi_ops[1]},
+ 	{ .compatible = "ralink,mt7621-spi", .data = &spi_ops[2] },
+ 	{},

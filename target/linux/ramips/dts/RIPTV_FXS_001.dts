@@ -1,0 +1,125 @@
+/dts-v1/;
+
+/include/ "rt5350.dtsi"
+
+/ {
+	model = "RIPTV FXS 001";
+	compatible = "RIPTV_FXS_001", "AWM002", "ralink,rt5350-soc";
+
+	palmbus@10000000 {
+		spi@b00 {
+			status = "okay";
+			num-cs = <2>;
+			m25p80@0 {
+				compatible = "mx25l6405d";
+				linux,modalias = "m25p80", "mx25l6405d";
+
+				#address-cells = <1>;
+				#size-cells = <1>;
+				reg = <0 0>;
+				spi-max-frequency = <10000000>;
+
+				partition@0 {
+					label = "u-boot";
+					reg = <0x0 0x30000>;
+					read-only;
+				};
+
+				partition@30000 {
+					label = "u-boot-env";
+					reg = <0x30000 0x10000>;
+					read-only;
+				};
+
+				factory: partition@40000 {
+					label = "factory";
+					reg = <0x40000 0x10000>;
+					read-only;
+				};
+
+				partition@50000 {
+					label = "firmware";
+					reg = <0x50000 0x1fb0000>;
+				};
+			};
+			ve890@1 {
+				compatible = "ve890";
+				linux,modalias = "ve890";
+				reg = <1 0>;
+				spi-max-frequency = <5000000>;
+			};
+		};
+
+		pcm@2000 {
+			status = "okay";
+		};
+	};
+
+	pinctrl {
+		state_default: pinctrl0 {
+			gpio {
+				ralink,group = "i2c", "jtag";
+				ralink,function = "gpio";
+			};
+		};
+		spi_pins: spi {
+			spi_cs1 {
+				ralink,group = "spi_cs1";
+				ralink,function = "spi_cs1";
+			};
+		};
+	};
+
+	gpio-leds {
+		compatible = "gpio-leds";
+		tx {
+			label = "awm002-evb:green:tx";
+			gpios = <&gpio0 15 1>;
+		};
+		rx {
+			label = "awm002-evb:green:rx";
+			gpios = <&gpio0 16 1>;
+		};
+		wps {
+			label = "awm002-evb:green:wps";
+			gpios = <&gpio0 21 1>;
+		};
+		ld1 {
+			label = "asiarf:green:ld1";
+			gpios = <&gpio0 0 1>;
+		};
+		ld2 {
+			label = "asiarf:green:ld2";
+			gpios = <&gpio0 1 1>;
+		};
+	};
+
+	gpio-keys-polled {
+		compatible = "gpio-keys-polled";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		poll-interval = <20>;
+		reset_wps {
+			label = "reset_wps";
+			gpios = <&gpio0 0 1>;
+			linux,code = <0x198>;
+		};
+		mode {
+			label = "mode";
+			gpios = <&gpio0 21 1>;
+			linux,code = <0x32>;
+		};
+	};
+
+	esw@10110000 {
+		ralink,portmap = <0x3f>;
+	};
+
+	ehci@101c0000 {
+		status = "okay";
+	};
+
+	ohci@101c1000 {
+		status = "okay";
+	};
+};
